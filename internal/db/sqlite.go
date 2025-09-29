@@ -145,12 +145,21 @@ func (s *SqliteStore) AddPublicKey(algorithm, keyData, comment string, isGlobal 
 
 // GetAllPublicKeys retrieves all public keys from the database.
 func (s *SqliteStore) GetAllPublicKeys() ([]records.PublicKey, error) {
-	return QueryModels[records.PublicKey](context.Background(), s.db, "SELECT id, algorithm, key_data, comment, is_global FROM public_keys ORDER BY comment")
+	return QueryModels[records.PublicKey](
+		context.Background(),
+		s.db,
+		"SELECT id, algorithm, key_data, comment, is_global FROM public_keys ORDER BY comment",
+	)
 }
 
 // GetPublicKeyByComment retrieves a single public key by its unique comment.
 func (s *SqliteStore) GetPublicKeyByComment(comment string) (*records.PublicKey, error) {
-	return QueryModel[records.PublicKey](context.Background(), s.db, "SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE comment = ?", comment)
+	return QueryModel[records.PublicKey](
+		context.Background(),
+		s.db,
+		"SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE comment = ?",
+		comment,
+	)
 }
 
 // AddPublicKeyAndGetModel adds a public key to the database if it doesn't already
@@ -190,14 +199,23 @@ func (s *SqliteStore) TogglePublicKeyGlobal(id int) error {
 
 // GetGlobalPublicKeys retrieves all keys marked as global.
 func (s *SqliteStore) GetGlobalPublicKeys() ([]records.PublicKey, error) {
-	return QueryModels[records.PublicKey](context.Background(), s.db, "SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE is_global = 1 ORDER BY comment")
+	return QueryModels[records.PublicKey](
+		context.Background(),
+		s.db,
+		"SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE is_global = 1 ORDER BY comment",
+	)
 }
 
 // GetKnownHostKey retrieves the trusted public key for a given hostname.
 func (s *SqliteStore) GetKnownHostKey(hostname string) (string, error) {
 	record, err := QueryModel[struct {
 		Key string
-	}](context.Background(), s.db, "SELECT key FROM known_hosts WHERE hostname = ?", hostname)
+	}](
+		context.Background(),
+		s.db,
+		"SELECT key FROM known_hosts WHERE hostname = ?",
+		hostname,
+	)
 	if err != nil {
 		return "", err
 	}

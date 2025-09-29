@@ -7,12 +7,14 @@
 package db // import "github.com/toeirei/keymaster/internal/db"
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os/user"
 	"strings"
 	"time"
 
+	"github.com/toeirei/keymaster/internal/db/records"
 	"github.com/toeirei/keymaster/internal/model"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -34,30 +36,8 @@ func NewSqliteStore(dataSourceName string) (*SqliteStore, error) {
 }
 
 // GetAllAccounts retrieves all accounts from the database.
-func (s *SqliteStore) GetAllAccounts() ([]model.Account, error) {
-	rows, err := s.db.Query("SELECT id, username, hostname, label, tags, serial, is_active FROM accounts ORDER BY label, hostname, username")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var accounts []model.Account
-	for rows.Next() {
-		var acc model.Account
-		var label sql.NullString
-		var tags sql.NullString
-		if err := rows.Scan(&acc.ID, &acc.Username, &acc.Hostname, &label, &tags, &acc.Serial, &acc.IsActive); err != nil {
-			return nil, err
-		}
-		if label.Valid {
-			acc.Label = label.String
-		}
-		if tags.Valid {
-			acc.Tags = tags.String
-		}
-		accounts = append(accounts, acc)
-	}
-	return accounts, nil
+func (s *SqliteStore) GetAllAccounts() ([]records.Account, error) {
+	return QueryModels[records.Account](context.Background(), s.db, "SELECT id, username, hostname, label, tags, serial, is_active FROM accounts ORDER BY label, hostname, username")
 }
 
 // AddAccount adds a new account to the database.
@@ -66,24 +46,27 @@ func (s *SqliteStore) AddAccount(username, hostname, label, tags string) (int, e
 	if err != nil {
 		return 0, err
 	}
+
 	id, err := result.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get last insert ID: %w", err)
 	}
-	if err == nil {
-		_ = s.LogAction("ADD_ACCOUNT", fmt.Sprintf("account: %s@%s", username, hostname))
-	}
+
+	s.LogAction("ADD_ACCOUNT", fmt.Sprintf("account: %s@%s", username, hostname))
 	return int(id), err
 }
 
 // DeleteAccount removes an account from the database by its ID.
 func (s *SqliteStore) DeleteAccount(id int) error {
 	// Get account details before deleting for logging.
-	var username, hostname string
-	err := s.db.QueryRow("SELECT username, hostname FROM accounts WHERE id = ?", id).Scan(&username, &hostname)
+	record, err := QueryModel[struct {
+		Username string
+		Hostname string
+	}](context.Background(), s.db, "SELECT username, hostname FROM accounts WHERE id = ?", id)
+
 	details := fmt.Sprintf("id: %d", id)
 	if err == nil {
-		details = fmt.Sprintf("account: %s@%s", username, hostname)
+		details = fmt.Sprintf("account: %s@%s", record.Username, record.Hostname)
 	}
 
 	_, err = s.db.Exec("DELETE FROM accounts WHERE id = ?", id)
@@ -104,16 +87,18 @@ func (s *SqliteStore) UpdateAccountSerial(id, serial int) error {
 // ToggleAccountStatus flips the active status of an account.
 func (s *SqliteStore) ToggleAccountStatus(id int) error {
 	// Get account details before toggling for logging.
-	var username, hostname string
-	var isActive bool
-	err := s.db.QueryRow("SELECT username, hostname, is_active FROM accounts WHERE id = ?", id).Scan(&username, &hostname, &isActive)
+	record, err := QueryModel[struct {
+		Username string
+		Hostname string
+		IsActive bool
+	}](context.Background(), s.db, "SELECT username, hostname, is_active FROM accounts WHERE id = ?", id)
 	if err != nil {
 		return err // If we can't find it, we can't toggle it.
 	}
 
 	_, err = s.db.Exec("UPDATE accounts SET is_active = NOT is_active WHERE id = ?", id)
 	if err == nil {
-		details := fmt.Sprintf("account: %s@%s, new_status: %t", username, hostname, !isActive)
+		details := fmt.Sprintf("account: %s@%s, new_status: %t", record.Username, record.Hostname, !record.IsActive)
 		_ = s.LogAction("TOGGLE_ACCOUNT_STATUS", details)
 	}
 	return err
@@ -145,30 +130,8 @@ func (s *SqliteStore) UpdateAccountTags(id int, tags string) error {
 }
 
 // GetAllActiveAccounts retrieves all active accounts from the database.
-func (s *SqliteStore) GetAllActiveAccounts() ([]model.Account, error) {
-	rows, err := s.db.Query("SELECT id, username, hostname, label, tags, serial, is_active FROM accounts WHERE is_active = 1 ORDER BY label, hostname, username")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var accounts []model.Account
-	for rows.Next() {
-		var acc model.Account
-		var label sql.NullString
-		var tags sql.NullString
-		if err := rows.Scan(&acc.ID, &acc.Username, &acc.Hostname, &label, &tags, &acc.Serial, &acc.IsActive); err != nil {
-			return nil, err
-		}
-		if label.Valid {
-			acc.Label = label.String
-		}
-		if tags.Valid {
-			acc.Tags = tags.String
-		}
-		accounts = append(accounts, acc)
-	}
-	return accounts, nil
+func (s *SqliteStore) GetAllActiveAccounts() ([]records.Account, error) {
+	return QueryModels[records.Account](context.Background(), s.db, "SELECT id, username, hostname, label, tags, serial, is_active FROM accounts WHERE is_active = 1 ORDER BY label, hostname, username")
 }
 
 // AddPublicKey adds a new public key to the database.
@@ -181,33 +144,13 @@ func (s *SqliteStore) AddPublicKey(algorithm, keyData, comment string, isGlobal 
 }
 
 // GetAllPublicKeys retrieves all public keys from the database.
-func (s *SqliteStore) GetAllPublicKeys() ([]model.PublicKey, error) {
-	rows, err := s.db.Query("SELECT id, algorithm, key_data, comment, is_global FROM public_keys ORDER BY comment")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var keys []model.PublicKey
-	for rows.Next() {
-		var key model.PublicKey
-		if err := rows.Scan(&key.ID, &key.Algorithm, &key.KeyData, &key.Comment, &key.IsGlobal); err != nil {
-			return nil, err
-		}
-		keys = append(keys, key)
-	}
-	return keys, nil
+func (s *SqliteStore) GetAllPublicKeys() ([]records.PublicKey, error) {
+	return QueryModels[records.PublicKey](context.Background(), s.db, "SELECT id, algorithm, key_data, comment, is_global FROM public_keys ORDER BY comment")
 }
 
 // GetPublicKeyByComment retrieves a single public key by its unique comment.
-func (s *SqliteStore) GetPublicKeyByComment(comment string) (*model.PublicKey, error) {
-	row := s.db.QueryRow("SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE comment = ?", comment)
-	var key model.PublicKey
-	err := row.Scan(&key.ID, &key.Algorithm, &key.KeyData, &key.Comment, &key.IsGlobal)
-	if err != nil {
-		return nil, err // This will be sql.ErrNoRows if not found
-	}
-	return &key, nil
+func (s *SqliteStore) GetPublicKeyByComment(comment string) (*records.PublicKey, error) {
+	return QueryModel[records.PublicKey](context.Background(), s.db, "SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE comment = ?", comment)
 }
 
 // AddPublicKeyAndGetModel adds a public key to the database if it doesn't already
@@ -246,35 +189,20 @@ func (s *SqliteStore) TogglePublicKeyGlobal(id int) error {
 }
 
 // GetGlobalPublicKeys retrieves all keys marked as global.
-func (s *SqliteStore) GetGlobalPublicKeys() ([]model.PublicKey, error) {
-	rows, err := s.db.Query("SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE is_global = 1 ORDER BY comment")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var keys []model.PublicKey
-	for rows.Next() {
-		var key model.PublicKey
-		if err := rows.Scan(&key.ID, &key.Algorithm, &key.KeyData, &key.Comment, &key.IsGlobal); err != nil {
-			return nil, err
-		}
-		keys = append(keys, key)
-	}
-	return keys, nil
+func (s *SqliteStore) GetGlobalPublicKeys() ([]records.PublicKey, error) {
+	return QueryModels[records.PublicKey](context.Background(), s.db, "SELECT id, algorithm, key_data, comment, is_global FROM public_keys WHERE is_global = 1 ORDER BY comment")
 }
 
 // GetKnownHostKey retrieves the trusted public key for a given hostname.
 func (s *SqliteStore) GetKnownHostKey(hostname string) (string, error) {
-	var key string
-	err := s.db.QueryRow("SELECT key FROM known_hosts WHERE hostname = ?", hostname).Scan(&key)
+	record, err := QueryModel[struct {
+		Key string
+	}](context.Background(), s.db, "SELECT key FROM known_hosts WHERE hostname = ?", hostname)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", nil // No key found is not an error, it's a state.
-		}
 		return "", err
 	}
-	return key, nil
+
+	return record.Key, nil
 }
 
 // AddKnownHostKey adds a new trusted host key to the database.
@@ -290,15 +218,16 @@ func (s *SqliteStore) AddKnownHostKey(hostname, key string) error {
 
 // CreateSystemKey adds a new system key to the database. It determines the correct serial automatically.
 func (s *SqliteStore) CreateSystemKey(publicKey, privateKey string) (int, error) {
-	var maxSerial sql.NullInt64
-	err := s.db.QueryRow("SELECT MAX(serial) FROM system_keys").Scan(&maxSerial)
+	record, err := QueryModel[struct {
+		Serial sql.NullInt64
+	}](context.Background(), s.db, "SELECT MAX(serial) FROM system_keys")
 	if err != nil {
 		return 0, err
 	}
 
 	newSerial := 1
-	if maxSerial.Valid {
-		newSerial = int(maxSerial.Int64) + 1
+	if record.Serial.Valid {
+		newSerial = int(record.Serial.Int64) + 1
 	}
 
 	// In a real rotation, we would first set all other keys to inactive.

@@ -14,12 +14,16 @@ import (
 	"github.com/bobg/go-generics/v4/slices"
 )
 
+func capitalize(s string) string {
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
 func toPascalCase(s string) string {
-	words := strings.Split(s, "_")
+	words := strings.Split(capitalize(s), "_")
 
 	return slices.Accum(words, func(result, word string) string {
 		if len(word) > 0 {
-			return result + strings.ToUpper(word[:1]) + word[1:]
+			return result + capitalize(word)
 		}
 		return result
 	})
